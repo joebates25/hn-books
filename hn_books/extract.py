@@ -10,6 +10,7 @@ from hn_books.isbn import canonical_isbn13, isbn13_to_isbn10, is_isbn10, normali
 from hn_books.models import BookCandidate
 
 HREF_RE = re.compile(r"""href\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+ANCHOR_RE = re.compile(r"<a\b[^>]*>.*?</a\s*>", re.IGNORECASE | re.DOTALL)
 BARE_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
 AMAZON_HOSTS = {
@@ -153,7 +154,9 @@ def extract_urls(text: str) -> list[str]:
         if url not in seen:
             seen.add(url)
             found.append(url)
-    stripped = HREF_RE.sub(" ", text)
+    # A link's text is HN's display copy of its href, cut short with "..." when long. Skip it, or the
+    # cut-short copy becomes a second mention (and its cut-off title slug can resolve to the wrong book).
+    stripped = HREF_RE.sub(" ", ANCHOR_RE.sub(" ", text))
     for match in BARE_URL_RE.finditer(stripped):
         url = match.group(0)
         if url not in seen:

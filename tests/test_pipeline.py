@@ -131,7 +131,7 @@ def test_store_links_prefer_oldest_posted_link_and_clean_it():
     from hn_books.site import _store_links
 
     def mention(url: str, method: str, created_at: int) -> MentionRow:
-        return MentionRow(1, "alice", created_at, 10, None, url, method, "")
+        return MentionRow(1, "alice", created_at, 10, None, url, method, "", (url,))
 
     book = RankedBook(1, "Fair Play", "Eve Rodsky", None, None, 3, 3, 3, 1.0)
     mentions = [  # newest first, as mentions_for_book returns them
@@ -213,3 +213,79 @@ def test_build_site_tags_books_by_link_source(tmp_path: Path):
     assert (tmp_path / "site" / "filter.js").exists()
     data = json.loads((tmp_path / "site" / "books.json").read_text())
     assert data["books"][0]["linked_from"] == ["amazon", "goodreads"]
+
+
+def test_cleanup_drops_cut_short_mentions_from_old_ingests(tmp_path: Path):
+    store = Store(tmp_path / "test.sqlite")
+    comment = Comment(id=1, author="alice", created_at=datetime(2026, 1, 1, tzinfo=timezone.utc), text="links")
+    store.upsert_comment(comment)
+    real = store.upsert_book(ResolvedBook(title="Effective awk Programming", author="Arnold Robbins"), "isbn:1")
+    phantom = store.upsert_book(ResolvedBook(title="ghost in the wi"), "goodreads:10256723-cut")
+    ghost = store.upsert_book(ResolvedBook(title="Ghost in the Wires", author="Kevin Mitnick"), "isbn:2")
+    full_awk = "https://openlibrary.org/books/OL26353120M/Effective_awk_Programming"
+    full_ghost = "https://www.goodreads.com/book/show/10256723-ghost-in-the-wires"
+    rows = [
+        (real, full_awk),
+        (real, "https://openlibrary.org/books/OL26353120M/Effective_awk_Prog..."),  # same book twice
+        (ghost, full_ghost),
+        (phantom, "https://www.goodreads.com/book/show/10256723-ghost-in-the-wi..."),  # wrong book from the cut slug
+        (ghost, "https://example.com/a-sentence-that-trails-off..."),  # no full copy in the comment: kept
+    ]
+    for book_id, url in rows:  # what older code wrote
+        store.add_mention(book_id, 1, url, "test", 1.0)
+    store.commit()
+    store.close()
+
+    store = Store(tmp_path / "test.sqlite")
+    left = store.conn.execute("SELECT book_id, matched_text FROM mention ORDER BY id").fetchall()
+    assert [tuple(r) for r in left] == [
+        (real, full_awk),
+        (ghost, full_ghost),
+        (ghost, "https://example.com/a-sentence-that-trails-off..."),
+    ]
+    assert store.get_book(str(phantom)) is None  # only the cut slug pointed at it
+    # It runs on every open, so rows older code writes later are cleaned too.
+    store.add_mention(real, 1, "https://openlibrary.org/books/OL26353120M/Effective_awk_Prog...", "test", 1.0)
+    store.commit()
+    store.close()
+    assert Store(tmp_path / "test.sqlite").stats()["mentions"] == 3
+
+
+def test_comment_linking_a_book_twice_counts_once(tmp_path: Path):
+    import re
+
+    from hn_books.site import build_site
+
+    store = Store(tmp_path / "test.sqlite")
+    ingestor = Ingestor(store, FakeResolver(store))
+    ingestor.ingest_comment(
+        Comment(
+            id=1,
+            author="alice",
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            text=(
+                '<a href="https://www.goodreads.com/book/isbn/9781449373320">goodreads</a> or '
+                '<a href="https://www.amazon.co.uk/dp/1449373321">amazon</a>'
+            ),
+            story_id=10,
+        )
+    )
+    store.commit()
+    assert store.stats()["mentions"] == 2  # both links are kept, so both sites show under "Linked from"
+
+    (book,) = store.ranked_books(resolved_only=True)
+    assert book.mentions == 1
+    assert book.detection_methods == ("amazon_url", "goodreads_isbn_url")
+    rows = store.mentions_for_book(book.id)
+    assert [(r.comment_id, r.links) for r in rows] == [
+        (1, ("https://www.goodreads.com/book/isbn/9781449373320", "https://www.amazon.co.uk/dp/1449373321"))
+    ]
+
+    build_site(store, tmp_path / "site", now=datetime(2026, 1, 5, tzinfo=timezone.utc))
+    page = (tmp_path / "site" / "book" / f"{book.id}.html").read_text()
+    assert "What people said (1)" in page
+    assert '<a href="https://www.amazon.co.uk/dp/1449373321">Amazon</a>' in page  # the comment's second link
+    assert page.count("news.ycombinator.com/item?id=1\"") == 1
+    index = (tmp_path / "site" / "index.html").read_text()
+    timeline = json.loads(re.search(r"<script type=application/json id=timeline>(.*?)</script>", index).group(1))
+    assert len(timeline[str(book.id)]) == 1

@@ -226,9 +226,10 @@ def _store_links(book: RankedBook, row, mentions: list[MentionRow]) -> list[tupl
     """(label, url) for Goodreads and Amazon. The oldest posted link wins; failing that, the ISBN."""
     found: dict[str, str] = {}
     for m in reversed(mentions):  # mentions come newest first
-        hit = _store_url(m.matched_text)
-        if hit and hit[0] not in found:
-            found[hit[0]] = hit[1]
+        for posted in m.links:
+            hit = _store_url(posted)
+            if hit and hit[0] not in found:
+                found[hit[0]] = hit[1]
     if "goodreads" not in found and book.isbn13:
         found["goodreads"] = f"https://www.goodreads.com/book/isbn/{book.isbn13}"
     isbn10 = (row["isbn10"] if row is not None else None) or (book.isbn13 and isbn13_to_isbn10(book.isbn13))

@@ -84,3 +84,14 @@ def test_openlibrary_isbn():
 def test_non_book_url_ignored():
     text = '<a href="https://news.ycombinator.com/item?id=1">hn</a>'
     assert extract_candidates(text) == []
+
+
+def test_cut_short_link_text_is_not_a_second_url():
+    # HN shows long links cut short with "...". The cut-off slug must not become a second candidate.
+    text = (
+        'see <a href="https:&#x2F;&#x2F;www.goodreads.com&#x2F;book&#x2F;show&#x2F;10256723-ghost-in-the-wires" '
+        'rel="nofollow">https:&#x2F;&#x2F;www.goodreads.com&#x2F;book&#x2F;show&#x2F;10256723-ghost-in-the-wi...</a>'
+    )
+    cands = extract_candidates(text)
+    assert [c.url for c in cands] == ["https://www.goodreads.com/book/show/10256723-ghost-in-the-wires"]
+    assert cands[0].title_hint == "ghost in the wires"

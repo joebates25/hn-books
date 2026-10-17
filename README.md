@@ -82,6 +82,7 @@ score = uniqueUsers + uniqueThreads * 2 + log(mentions + 1)
 ```
 
 Independent mentions across threads rank higher than a pile-on in one story.
+`mentions` counts comments: a comment that links the same book twice (say Amazon and Goodreads) counts once.
 
 ## Next (not in V0)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -88,6 +88,7 @@ class MentionRow:
     matched_text: str
     detection_method: str
     snippet: str
+    links: tuple[str, ...]  # every link this comment posted for the book, matched_text first
 
 
 class Store:
@@ -99,6 +100,34 @@ class Store:
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.executescript(SCHEMA)
+        self.conn.commit()
+        self._drop_cut_short_mentions()
+
+    def _drop_cut_short_mentions(self) -> None:
+        """Delete mentions made from HN's cut-short link text, like ".../Effective_awk_Prog...".
+
+        Older code read a link's display text as a second URL. Each such row sits next to a row for the
+        full URL in the same comment. Books left with no mentions came only from a cut-off title slug, so
+        they go too. This runs on every open, not once, so a copy written by older code still gets cleaned.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT cut.id, cut.book_id
+            FROM mention cut
+            JOIN mention whole ON whole.comment_id = cut.comment_id AND whole.id <> cut.id
+            WHERE substr(cut.matched_text, -3) = '...'
+              AND substr(whole.matched_text, -3) <> '...'
+              AND substr(whole.matched_text, 1, length(cut.matched_text) - 3)
+                  = substr(cut.matched_text, 1, length(cut.matched_text) - 3)
+            """
+        ).fetchall()
+        if not rows:
+            return
+        self.conn.executemany("DELETE FROM mention WHERE id = ?", [(r["id"],) for r in rows])
+        self.conn.executemany(
+            "DELETE FROM book WHERE id = ? AND NOT EXISTS (SELECT 1 FROM mention WHERE book_id = book.id)",
+            [(book_id,) for book_id in {r["book_id"] for r in rows}],
+        )
         self.conn.commit()
 
     def close(self) -> None:
@@ -271,7 +300,7 @@ class Store:
                 b.author,
                 b.isbn13,
                 b.source,
-                COUNT(m.id) AS mentions,
+                COUNT(DISTINCT m.comment_id) AS mentions,
                 COUNT(DISTINCT c.author) AS unique_users,
                 COUNT(DISTINCT COALESCE(c.story_id, c.id)) AS unique_threads,
                 GROUP_CONCAT(DISTINCT m.detection_method) AS detection_methods
@@ -349,13 +378,18 @@ class Store:
             FROM mention m
             JOIN comment c ON c.id = m.comment_id
             WHERE m.book_id = ?
-            ORDER BY c.created_at DESC
-            LIMIT ?
+            ORDER BY c.created_at DESC, c.id, m.id
             """,
-            (book_id, -1 if limit is None else limit),
+            (book_id,),
         ).fetchall()
-        out = []
+        out: list[MentionRow] = []
         for row in rows:
+            # One row per comment, even if it links the book twice (say Amazon and Goodreads).
+            if out and out[-1].comment_id == row["comment_id"]:
+                out[-1] = replace(out[-1], links=out[-1].links + (row["matched_text"],))
+                continue
+            if limit is not None and len(out) >= limit:
+                break
             out.append(
                 MentionRow(
                     comment_id=int(row["comment_id"]),
@@ -366,6 +400,7 @@ class Store:
                     matched_text=row["matched_text"],
                     detection_method=row["detection_method"],
                     snippet=_snippet(row["text"], snippet_width),
+                    links=(row["matched_text"],),
                 )
             )
         return out
