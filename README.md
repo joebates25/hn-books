@@ -90,13 +90,18 @@ ISBN-in-text, exact/fuzzy title matching, LLM extraction, alias learning (`DDIA`
 ## Website
 
 ```bash
-# Write site/ (index, recent, all books, one page per book, books.json)
+# Write site/ (Top, All books, one page per book, books.json)
 hn-books build-site --out site
 python3 -m http.server --directory site 8000
 ```
 
 Only resolved books (with an author or Open Library match) are published.
 Unresolved URL slugs and ASINs stay in the database.
+
+The Top page ranks books for a date range: last week (the default), last month,
+all time, or a start and end date you pick. Every page can also be narrowed to
+books linked from Goodreads, Amazon, or other sites. Both filters run in the
+browser and are kept in the URL (`?range=month&site=amazon`), so a view can be shared.
 
 `.github/workflows/publish.yml` runs every 6 hours on GitHub Actions:
 restore the database from the `data` branch, `harvest --days 3`, push the

@@ -60,7 +60,6 @@ def main(argv: list[str] | None = None) -> int:
     site = sub.add_parser("build-site", help="Write the static website (HTML + books.json)")
     site.add_argument("--out", default="site", help="Output directory (default: site)")
     site.add_argument("--top", type=int, default=100, help="Books on the Top page (default: 100)")
-    site.add_argument("--recent-days", type=int, default=30, help="Window for the Recent page (default: 30)")
 
     args = parser.parse_args(argv)
     store = Store(args.db)
@@ -208,7 +207,7 @@ def _cmd_stats(store: Store) -> int:
 
 
 def _cmd_build_site(store: Store, args: argparse.Namespace) -> int:
-    result = build_site(store, args.out, top_limit=args.top, recent_days=args.recent_days)
+    result = build_site(store, args.out, top_limit=args.top)
     print(f"wrote {result.pages} pages for {result.books} books to {result.out_dir}/")
     return 0
 

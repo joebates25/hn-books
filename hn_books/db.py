@@ -75,6 +75,7 @@ class RankedBook:
     unique_users: int
     unique_threads: int
     score: float
+    detection_methods: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -272,7 +273,8 @@ class Store:
                 b.source,
                 COUNT(m.id) AS mentions,
                 COUNT(DISTINCT c.author) AS unique_users,
-                COUNT(DISTINCT COALESCE(c.story_id, c.id)) AS unique_threads
+                COUNT(DISTINCT COALESCE(c.story_id, c.id)) AS unique_threads,
+                GROUP_CONCAT(DISTINCT m.detection_method) AS detection_methods
             FROM book b
             JOIN mention m ON m.book_id = b.id
             JOIN comment c ON c.id = m.comment_id
@@ -298,6 +300,7 @@ class Store:
                     unique_users=users,
                     unique_threads=threads,
                     score=score,
+                    detection_methods=tuple(sorted(row["detection_methods"].split(","))),
                 )
             )
         ranked.sort(key=lambda b: (b.score, b.mentions, b.unique_threads), reverse=True)
