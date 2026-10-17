@@ -9,8 +9,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
+from urllib.parse import urlparse
 
 from hn_books.db import MentionRow, RankedBook, Store
+from hn_books.extract import classify_url
+from hn_books.isbn import isbn13_to_isbn10
 
 SITE_NAME = "HN Books"
 HN_ITEM = "https://news.ycombinator.com/item?id={}"
@@ -199,13 +202,53 @@ def _all_list(books: list[RankedBook]) -> str:
     )
 
 
+def _store_url(posted: str) -> tuple[str, str] | None:
+    """(site, url) for a Goodreads or Amazon link a commenter posted, rebuilt from the book or product id.
+
+    That drops tracking and affiliate params, and repairs links HN cut short with "..." as long as the id survived.
+    """
+    candidate = classify_url(posted)
+    if candidate is None:
+        return None
+    if candidate.detection_method == "goodreads_url":
+        return "goodreads", f"https://www.goodreads.com/book/show/{candidate.extra_id}"
+    if candidate.detection_method == "goodreads_isbn_url":
+        return "goodreads", f"https://www.goodreads.com/book/isbn/{candidate.isbn13}"
+    if candidate.detection_method == "amazon_short_url":  # a redirect, so there is no id to rebuild from
+        return None if posted.rstrip().endswith(("...", "…")) else ("amazon", candidate.url)
+    if candidate.source == "amazon" and (candidate.asin or candidate.isbn10):
+        host = urlparse(candidate.url).netloc.lower().removeprefix("www.").removeprefix("smile.")
+        return "amazon", f"https://www.{host}/dp/{candidate.asin or candidate.isbn10}"
+    return None
+
+
+def _store_links(book: RankedBook, row, mentions: list[MentionRow]) -> list[tuple[str, str]]:
+    """(label, url) for Goodreads and Amazon. The oldest posted link wins; failing that, the ISBN."""
+    found: dict[str, str] = {}
+    for m in reversed(mentions):  # mentions come newest first
+        hit = _store_url(m.matched_text)
+        if hit and hit[0] not in found:
+            found[hit[0]] = hit[1]
+    if "goodreads" not in found and book.isbn13:
+        found["goodreads"] = f"https://www.goodreads.com/book/isbn/{book.isbn13}"
+    isbn10 = (row["isbn10"] if row is not None else None) or (book.isbn13 and isbn13_to_isbn10(book.isbn13))
+    if "amazon" not in found and isbn10:
+        found["amazon"] = f"https://www.amazon.com/dp/{isbn10}"
+    return [(label, found[key]) for key, label in SOURCE_FILTERS if key in found]
+
+
 def _book_page(book: RankedBook, row, mentions: list[MentionRow], rank: int, updated: str) -> str:
-    links = []
+    links = [f'<a href="{escape(url)}">{label}</a>' for label, url in _store_links(book, row, mentions)]
     if row is not None and row["openlibrary_work_id"]:
         links.append(f'<a href="https://openlibrary.org/works/{escape(row["openlibrary_work_id"])}">Open Library</a>')
     elif book.isbn13:
         links.append(f'<a href="https://openlibrary.org/isbn/{escape(book.isbn13)}">Open Library</a>')
-    if mentions and mentions[-1].matched_text.startswith(("http://", "https://")):
+    first = mentions[-1] if mentions else None
+    if (
+        first
+        and first.matched_text.startswith(("http://", "https://"))
+        and not first.detection_method.startswith(("amazon", "goodreads"))  # already linked above
+    ):
         links.append(f'<a href="{escape(mentions[-1].matched_text)}">First link posted on HN</a>')
 
     cover = ""

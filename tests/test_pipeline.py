@@ -120,6 +120,31 @@ def test_build_site_writes_book_pages(tmp_path: Path):
     data = json.loads((tmp_path / "site" / "books.json").read_text())
     assert data["books"][0]["url"] == f"book/{book_id}.html"
     assert "index.html?range=month" in (tmp_path / "site" / "recent.html").read_text()  # old links redirect
+    # Store links: the posted Amazon link, cleaned up, plus a Goodreads link built from the ISBN.
+    assert '<a href="https://www.goodreads.com/book/isbn/9781449373320">Goodreads</a>' in page
+    assert '<a href="https://www.amazon.com/dp/1449373321">Amazon</a>' in page
+    assert "First link posted on HN" not in page  # it was the Amazon link, already shown
+
+
+def test_store_links_prefer_oldest_posted_link_and_clean_it():
+    from hn_books.db import MentionRow, RankedBook
+    from hn_books.site import _store_links
+
+    def mention(url: str, method: str, created_at: int) -> MentionRow:
+        return MentionRow(1, "alice", created_at, 10, None, url, method, "")
+
+    book = RankedBook(1, "Fair Play", "Eve Rodsky", None, None, 3, 3, 3, 1.0)
+    mentions = [  # newest first, as mentions_for_book returns them
+        mention("https://www.goodreads.com/book/show/999-other-edition", "goodreads_url", 3),
+        mention("https://goodreads.com/en/book/show/44071899-fair-pl...", "goodreads_url", 2),
+        mention("https://www.amazon.co.uk/Fair-Play/dp/B07FKMDWKY/ref=sr_1?tag=someone-21", "amazon_url", 1),
+    ]
+    assert _store_links(book, None, mentions) == [
+        ("Goodreads", "https://www.goodreads.com/book/show/44071899"),
+        ("Amazon", "https://www.amazon.co.uk/dp/B07FKMDWKY"),
+    ]
+    # A short link HN cut off can't be repaired, and with no ISBN there is nothing to fall back on.
+    assert _store_links(book, None, [mention("https://a.co/d/iR7s...", "amazon_short_url", 1)]) == []
 
 
 def test_build_site_embeds_mention_timeline(tmp_path: Path):
