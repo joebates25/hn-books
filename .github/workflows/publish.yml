@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "17 */6 * * *" # every 6 hours, off the top of the hour when Actions is busiest
   workflow_dispatch:
+    inputs:
+      days:
+        description: "Days of comments to harvest (use more to fill a gap)"
+        type: number
+        default: 3
   push:
     branches: [main]
 
@@ -42,7 +47,9 @@ jobs:
           hn-books stats
 
       - name: Harvest recent comments
-        run: hn-books harvest --days 3
+        env:
+          DAYS: ${{ inputs.days || 3 }} # schedule and push runs have no inputs
+        run: hn-books harvest --days "$DAYS"
 
       - name: Save database
         env:
