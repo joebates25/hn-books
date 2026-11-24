@@ -68,7 +68,7 @@ jobs:
       - name: Build site
         run: hn-books build-site --out site
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: site
 
